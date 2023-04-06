@@ -1,11 +1,18 @@
 import express from "express";
 import bodyParser from "body-parser";
-import cors from "cors";
 import jwt from "jsonwebtoken";
+import mysql from "mysql";
+import cors from "cors";
 
 // console.log(require("crypto").randomBytes(64).toString("hex"));
 
 const secret = "sommar";
+
+const app = express();
+const PORT = 5004;
+const accounts = [];
+app.use(bodyParser.json());
+app.use(cors());
 
 function generateAccessToken(userId) {
   return jwt.sign(userId, secret);
@@ -14,6 +21,7 @@ function generateAccessToken(userId) {
 function authenticateToken(req, res, next) {
   const authHeader = req.headers["authorization"];
   const token = authHeader && authHeader.split(" ")[1];
+  console.log("token from auth header", token);
 
   if (token == null) return res.sendStatus(401);
 
@@ -22,40 +30,70 @@ function authenticateToken(req, res, next) {
 
     if (err) return res.sendStatus(403);
 
+    console.log("my id:", userId);
+
     req.userId = userId;
 
     next();
   });
 }
 
-const app = express();
-app.use(bodyParser.json());
-app.use(cors());
+const connection = mysql.createConnection({
+  host: "localhost",
+  user: "testare",
+  password: "testare",
+  database: "chasbank",
+  port: 8889,
+});
 
-const PORT = 4001;
+app.get("/", (req, res) => {
+  const id = 1;
 
-let users = [];
+  connection.query(
+    "SELECT * FROM users1 WHERE id = ?",
+    [id],
+    (err, results) => {
+      console.log(results);
+      console.log(err);
 
-let userIds = 1;
-
-const accounts = [];
+      res.send(results[0].username);
+    }
+  );
+});
 
 app.post("/users", (req, res) => {
   const user = req.body;
   console.log(user);
-  user.id = userIds++;
-  users.push(user);
+  const { username, password, email } = user;
 
-  const account = {
-    money: "100",
-    userId: user.id,
-  };
-  accounts.push(account);
+  connection.query(
+    "INSERT INTO users1 (username, password, email) VALUES (?, ?, ?)",
+    [username, password, email],
+    (err, results) => {
+      console.log("results", results);
+      console.log("user error", err);
 
-  console.log(users);
+      if (err) {
+        res.sendStatus(500);
+      } else {
+        const userId = results.insertId;
 
-  res.statusCode = 200;
-  res.send("Good work");
+        connection.query(
+          "INSERT INTO accounts (user_id) VALUES (?)",
+          [userId],
+
+          (err, results) => {
+            console.log("account error", err);
+            if (err) {
+              res.sendStatus(500);
+            } else {
+              res.send("ok");
+            }
+          }
+        );
+      }
+    }
+  );
 });
 
 // 1. Skapa token från user. Skicka token till användare.
@@ -63,28 +101,39 @@ app.post("/users", (req, res) => {
 
 app.post("/sessions", (req, res) => {
   const user = req.body;
-  console.log(user);
-  const dbUser = users.find((u) => u.username == user.username);
+  const { username, password } = user;
 
-  if (dbUser != null && dbUser.password == user.password) {
-    const token = generateAccessToken(dbUser.id);
+  connection.query(
+    "SELECT id, password FROM users1 WHERE username = ?",
+    [username],
+    (err, results) => {
+      const dbUser = results[0];
+      console.log("DB USER", dbUser);
+      if (dbUser && dbUser.password == password) {
+        const token = generateAccessToken(dbUser.id);
+        console.log("Success");
+        console.log("token here ", token);
 
-    console.log();
-    res.json({ token });
-  } else {
-    res.status = 401;
-    res.json();
-  }
+        res.json({ token });
+      }
+    }
+  );
 });
 
 app.get("/me/accounts", authenticateToken, (req, res) => {
-  console.log("userId: ", req.userId);
+  const user_id = req.userId;
+  console.log("user", user_id);
 
-  // Använd userId för att hämta account
-  const dbAccount = accounts.find((a) => a.userId == req.userId);
-
-  res.json(dbAccount);
-  res.json({ userId: req.userId });
+  connection.query(
+    "SELECT amount FROM accounts WHERE user_id = ?",
+    [user_id],
+    (err, results) => {
+      const amount = results[0].amount;
+      res.json(amount);
+      console.log("Error account", err);
+      console.log("GOOD", results);
+    }
+  );
 });
 
 app.listen(PORT, () => {
